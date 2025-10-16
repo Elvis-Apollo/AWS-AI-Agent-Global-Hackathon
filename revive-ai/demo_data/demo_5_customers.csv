@@ -1,0 +1,6 @@
+customer_id,email,company_name,subscription_tier,mrr,churn_date,cancellation_reason
+c001,cto@techstart.io,TechStart Inc,growth,799,2025-09-15,Switched to competitor with better API documentation
+c002,admin@smallbiz.co,SmallBiz Solutions,starter,299,2025-09-20,Too expensive for current budget constraints
+c003,founder@ecomshop.pro,EcomShop Pro,growth,599,2025-09-18,Missing advanced inventory management features
+c004,ops@digitalagency.com,Digital Agency Co,enterprise,1499,2025-09-10,Poor onboarding experience and lack of support
+c005,cfo@fintechai.com,FinTech AI,growth,899,2025-09-22,Company downsizing and budget cuts

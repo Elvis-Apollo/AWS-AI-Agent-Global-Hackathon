@@ -1,0 +1,1055 @@
+# Revive AI - Technical Implementation Specification
+## AWS AI Agent Hackathon - Build Guide for Agentic AI (hackathon page: https://aws-agent-hackathon.devpost.com/?ref_feature=challenge&ref_medium=your-open-hackathons&ref_content=Submissions+open&_gl=1*1de1hy7*_gcl_au*MTcyMDc1Mjk2MS4xNzU5Nzk4MTI4*_ga*MTQ3MDYyNjQwMy4xNzU5Nzk4MTI5*_ga_0YHJK3Y10M*czE3NTk4MDUxOTMkbzIkZzEkdDE3NTk4MDY1MzAkajYwJGwwJGgw) 
+
+**Version:** 1.1  
+**Target:** 5-day implementation  
+**Architecture:** Step Functions-orchestrated multi-agent system on AWS  
+
+---
+
+## 1. System Overview
+
+### Core Objective
+Build a working multi-agent AI system that processes 50 churned SaaS customers and generates personalized win-back email campaigns in under 60 seconds.
+
+### Technology Stack
+
+**Required AWS Services:**
+- Amazon Bedrock (Claude 3.5 Sonnet) - All AI operations
+- AWS Step Functions (Standard) - Orchestration and controlled parallelism
+- AWS Lambda (Python 3.11) - API handler + customer worker
+- Amazon S3 - Data and status storage
+- API Gateway - REST endpoints
+
+**Frontend:**
+- Single HTML file with inline JavaScript
+- Tailwind CSS (CDN)
+- No build process required
+
+**Storage:**
+- S3 JSON files (no database needed)
+- Separate buckets for frontend assets and customer data
+
+---
+
+## 2. Architecture Diagram
+
+```
+User → Upload/Load Demo
+  ↓
+API Gateway → Lambda API Handler
+  ↓
+S3 (data bucket): Store CSV + create status stub
+  ↓
+Step Functions Execution (Standard)
+  ↓
+Map State (MaxConcurrency = 8)
+  ↓
+Lambda Customer Worker → Bedrock (Agent 1)
+                               ↓
+                         Bedrock (Agent 2)
+                               ↓
+                  S3 (data bucket): Append results + update status
+  ↓
+Execution Complete → status.json marks "complete"
+  ↓
+UI polls API Gateway → Lambda API Handler → status/results
+  ↓
+UI: Display campaigns
+```
+
+**Key Simplification:** Step Functions handles fan-out with capped concurrency; all customer logic stays in one worker Lambda.
+
+---
+
+## 3. Data Models
+
+### Input: Customer CSV
+
+**Required Fields:**
+```
+customer_id,email,company_name,subscription_tier,mrr,churn_date,cancellation_reason
+c001,cto@acme.com,Acme Corp,growth,799,2025-09-15,Too expensive
+```
+
+**Validation Rules:**
+- customer_id: unique string
+- email: valid email format
+- subscription_tier: starter|growth|enterprise
+- mrr: positive number
+- churn_date: ISO 8601 date
+- cancellation_reason: optional string
+
+### Output: Analysis JSON
+
+```json
+{
+  "customer_id": "c001",
+  "category": "pricing|features|onboarding|competition|business_closure|unclear",
+  "confidence": 85,
+  "insights": [
+    "Specific observation 1",
+    "Specific observation 2",
+    "Specific observation 3"
+  ],
+  "recommendation": "Tactical win-back approach"
+}
+```
+
+### Output: Campaign JSON
+
+```json
+{
+  "customer_id": "c001",
+  "emails": [
+    {
+      "number": 1,
+      "subject": "Subject line under 50 chars",
+      "body": "Email body 150-250 words",
+      "cta": "Call to action text"
+    },
+    {
+      "number": 2,
+      "subject": "...",
+      "body": "...",
+      "cta": "..."
+    },
+    {
+      "number": 3,
+      "subject": "...",
+      "body": "...",
+      "cta": "..."
+    }
+  ]
+}
+```
+
+### S3 Storage Structure
+
+```
+s3://revive-ai-data/
+├── uploads/
+│   └── {upload_id}.csv
+├── results/
+│   └── {upload_id}/
+│       ├── customers/
+│       │   └── {customer_id}.json
+│       ├── customers.json
+│       ├── analyses.json
+│       ├── campaigns.json
+│       └── status.json
+└── demo/
+    ├── demo_50_customers.csv
+    └── demo_results.json
+
+s3://revive-ai-frontend/
+└── web/
+    └── index.html
+```
+
+### Status JSON (`results/{upload_id}/status.json`)
+
+```json
+{
+  "upload_id": "20251008_143022",
+  "status": "processing|complete|failed",
+  "total": 50,
+  "completed": 25,
+  "failed": 1,
+  "execution_arn": "arn:aws:states:...",
+  "started_at": "2025-10-08T14:30:22Z",
+  "updated_at": "2025-10-08T14:30:55Z",
+  "estimated_remaining_seconds": 22,
+  "errors": [
+    {
+      "customer_id": "c018",
+      "message": "Bedrock timeout",
+      "retry_attempts": 2
+    }
+  ]
+}
+```
+
+---
+
+## 4. Orchestration & Compute Components
+
+### Step Function: `revive-ai-orchestration`
+
+- **Type:** Standard workflow (target runtime <5 minutes)
+- **Start:** `PrepareJob` task seeds `results/{upload_id}/status.json` with `processing` state, totals, and timestamps
+- **Map State:** Iterates customers with `MaxConcurrency = 8` for balanced throughput; reuses shared Lambda worker code per item
+- **Item Task:** Invokes the customer worker Lambda with `{upload_id, customer}` payload
+- **Catch:** Item-level failures captured and appended to `status.json.errors`; workflow continues processing remaining customers
+- **End:** `FinalizeJob` task compiles aggregated `customers.json`, `analyses.json`, `campaigns.json`, marks status as `complete`, and writes metrics (success, failed, duration_ms)
+
+### Lambda: `revive-ai-api-handler`
+
+- **Purpose:** Handles API Gateway calls for `/upload`, `/process`, `/results`, `/demo`
+- **Runtime:** Python 3.11 (512 MB, 30 s timeout)
+- **Environment Variables:**
+  - `DATA_BUCKET=revive-ai-data`
+  - `FRONTEND_BUCKET=revive-ai-frontend`
+  - `STATE_MACHINE_ARN=arn:aws:states:...:stateMachine:revive-ai-orchestration`
+  - `BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022`
+- **Operations:**
+  - `upload`: validate CSV, store under `uploads/`, return `upload_id`
+  - `process`: start Step Functions execution and return `{status:"processing", executionArn, upload_id}`
+  - `results`: read `status.json`, join with any completed customer files, surface progress metrics
+  - `demo`: return `demo_results.json` immediately for predictable demo path
+- **IAM Permissions:**
+  - `states:StartExecution`
+  - `s3:GetObject`, `s3:PutObject` on `revive-ai-data`
+  - CloudWatch Logs basic execution
+
+### Lambda: `revive-ai-customer-worker`
+
+- **Purpose:** Runs both Bedrock agents for a single customer and persists outputs
+- **Runtime:** Python 3.11 (1024 MB, 60 s timeout)
+- **Environment Variables:**
+  - `DATA_BUCKET=revive-ai-data`
+  - `BEDROCK_MODEL_ID=anthropic.claude-3-5-sonnet-20241022`
+- **Execution Flow:**
+  1. Receive `{upload_id, customer}` from Step Functions Map state
+  2. Invoke analyze + campaign agents using shared Bedrock client session (`asyncio.gather`) to minimize latency
+  3. Write per-customer payload to `results/{upload_id}/customers/{customer_id}.json`
+  4. Update `status.json` with atomic counter increments (`completed`, `failed`, `last_processed_at`)
+- **IAM Permissions:**
+  - `bedrock:InvokeModel`
+  - `s3:GetObject`, `s3:PutObject` (scoped to `results/{upload_id}/*`)
+  - CloudWatch Logs basic execution
+- **Retry Strategy:**
+  - Step Functions config: `MaxAttempts = 2`, `BackoffRate = 2.0`
+  - On final failure, record error details and continue
+
+**Error Handling Notes:**
+- Status updates occur even on failure so `/results` always reflects true progress
+- Bedrock prompt/response snippets logged with sensitive fields masked
+- Aggregated `status.json` includes `estimated_remaining_seconds` for UI display
+
+---
+
+## 5. AI Agent Specifications
+
+### Agent 1: Churn Analysis
+
+**Purpose:** Categorize why customer churned with confidence score
+
+**Bedrock Configuration:**
+```
+Model: anthropic.claude-3-5-sonnet-20241022
+Temperature: 0.3 (analytical task)
+Max Tokens: 1024
+```
+
+**Prompt Template Structure:**
+
+**System Context:**
+```
+You are a SaaS customer success analyst expert at understanding churn patterns.
+```
+
+**User Prompt:**
+```
+Analyze why this customer churned.
+
+Customer: {company_name}
+Subscription: {subscription_tier} (${mrr}/month)
+Churn Date: {churn_date}
+Reason Given: {cancellation_reason or "Not provided"}
+
+Categorize into ONE of: pricing, features, onboarding, competition, business_closure, unclear
+
+Provide:
+- Confidence score (0-100)
+- 3-5 specific insights
+- Tactical recommendation
+
+Respond ONLY with valid JSON:
+{
+  "category": "...",
+  "confidence": 85,
+  "insights": ["...", "...", "..."],
+  "recommendation": "..."
+}
+```
+
+**Validation:**
+- Ensure JSON is parseable
+- Verify category is one of allowed values
+- Confidence must be 0-100
+- Insights array must have 3-5 items
+
+**Processing Time Target:** <3 seconds per customer
+
+---
+
+### Agent 2: Campaign Generation
+
+**Purpose:** Create personalized 3-email win-back sequence
+
+**Bedrock Configuration:**
+```
+Model: anthropic.claude-3-5-sonnet-20241022
+Temperature: 0.7 (creative task)
+Max Tokens: 2048
+```
+
+**Prompt Template Structure:**
+
+**System Context:**
+```
+You are an expert email copywriter specializing in SaaS win-back campaigns.
+```
+
+**User Prompt:**
+```
+Create a 3-email win-back sequence.
+
+Customer: {company_name}
+Previous Plan: {subscription_tier} (${mrr}/month)
+
+Churn Analysis:
+- Category: {category}
+- Confidence: {confidence}%
+- Insights: {insights joined}
+- Recommendation: {recommendation}
+
+{category_specific_guidance}
+
+Email Requirements:
+- Email 1 (Day 7): Gentle re-engagement, acknowledge their decision
+- Email 2 (Day 14): Address pain point, offer solution
+- Email 3 (Day 30): Compelling offer or final touch
+
+Each email:
+- Subject: <50 characters, compelling, personalized
+- Body: 150-250 words, professional but warm tone
+- CTA: Clear action, 3-7 words
+
+Respond ONLY with valid JSON:
+{
+  "emails": [
+    {"number": 1, "subject": "...", "body": "...", "cta": "..."},
+    {"number": 2, "subject": "...", "body": "...", "cta": "..."},
+    {"number": 3, "subject": "...", "body": "...", "cta": "..."}
+  ]
+}
+```
+
+**Category-Specific Guidance:**
+
+**For pricing churn:**
+```
+GUIDANCE:
+- Email 1: Empathize with budget constraints, no immediate discount
+- Email 2: Flexible payment options (annual discount, payment plans)
+- Email 3: Limited-time 20% discount for 3 months
+- Tone: Understanding, value-focused
+- Avoid: Desperation, aggressive discounting too early
+```
+
+**For features churn:**
+```
+GUIDANCE:
+- Email 1: Ask what specific features they needed
+- Email 2: Showcase recently added features matching their needs
+- Email 3: Early access to upcoming features in their area
+- Tone: Product-focused, innovative
+- Include: Specific feature names, benefits
+```
+
+**For onboarding churn:**
+```
+GUIDANCE:
+- Email 1: Apologize for poor setup experience
+- Email 2: Offer free 30-min white-glove onboarding call
+- Email 3: Success stories from similar companies
+- Tone: Helpful, educational, patient
+- Include: Quick-start resources, support offers
+```
+
+**For competition churn:**
+```
+GUIDANCE:
+- Email 1: Respect their decision professionally
+- Email 2: Highlight unique differentiators vs competitors
+- Email 3: Case study showing superior ROI/results
+- Tone: Confident but not defensive, data-driven
+- Avoid: Badmouthing competitors
+```
+
+**For business_closure churn:**
+```
+GUIDANCE:
+- Email 1: Warm farewell, wish them well
+- Email 2: Stay-in-touch, archive data securely
+- Email 3: "When ready" message, easy reactivation
+- Tone: Respectful, brief, professional
+- Keep sequence short and non-pushy
+```
+
+**For unclear churn:**
+```
+GUIDANCE:
+- Email 1: Ask for honest feedback
+- Email 2: Offer variety of solutions (price, features, support)
+- Email 3: Personal touch from leadership
+- Tone: Curious, flexible, relationship-focused
+```
+
+**Validation:**
+- Ensure JSON is parseable
+- Verify exactly 3 email objects
+- Check subject length <50 chars
+- Validate body length 150-250 words
+- Ensure CTA exists for each
+
+**Processing Time Target:** <5 seconds per campaign
+
+---
+
+## 6. API Specifications
+
+### Endpoint 1: Upload CSV
+
+**Method:** POST  
+**Path:** `/upload`  
+**Content-Type:** multipart/form-data
+
+**Request:**
+```
+Body: file (CSV upload)
+```
+
+**Response (Success):**
+```json
+{
+  "statusCode": 200,
+  "body": {
+    "upload_id": "20251008_143022",
+    "status": "uploaded",
+    "customer_count": 50
+  }
+}
+```
+
+**Response (Error):**
+```json
+{
+  "statusCode": 400,
+  "body": {
+    "error": "Invalid CSV format",
+    "details": "Missing required field: mrr"
+  }
+}
+```
+
+---
+
+### Endpoint 2: Process Upload
+
+**Method:** POST  
+**Path:** `/process`  
+**Content-Type:** application/json
+
+**Request:**
+```json
+{
+  "upload_id": "20251008_143022"
+}
+```
+
+**Response (Accepted):**
+```json
+{
+  "statusCode": 202,
+  "body": {
+    "upload_id": "20251008_143022",
+    "status": "processing",
+    "execution_arn": "arn:aws:states:REGION:ACCOUNT:execution:revive-ai-orchestration:20251008_143022",
+    "message": "Step Function started for 50 customers"
+  }
+}
+```
+
+**Notes:** `/process` should return in <2 seconds; Step Functions handles the long-running work.
+
+---
+
+### Endpoint 3: Get Results
+
+**Method:** GET  
+**Path:** `/results?upload_id={id}`
+
+**Response (Processing):**
+```json
+{
+  "statusCode": 200,
+  "body": {
+    "status": "processing",
+    "completed": 25,
+    "total": 50,
+    "progress": 50,
+    "failures": 1,
+    "execution_arn": "arn:aws:states:...",
+    "estimated_remaining_seconds": 22
+  }
+}
+```
+
+**Response (Complete):**
+```json
+{
+  "statusCode": 200,
+  "body": {
+    "status": "complete",
+    "upload_id": "20251008_143022",
+    "campaigns": [
+      {
+        "customer_id": "c001",
+        "company_name": "Acme Corp",
+        "analysis": {...},
+        "campaign": {...},
+        "status": "success"
+      }
+    ]
+  }
+}
+```
+
+**Implementation Note:** `/results` Lambda reads `status.json` first, then loads aggregated JSON if `status` is `complete`; while processing, it can read from `customers/{customer_id}.json` to surface finished entries and tag incomplete ones as `status: "pending"`.
+
+---
+
+### Endpoint 4: Load Demo
+
+**Method:** POST  
+**Path:** `/demo`
+
+**Response:**
+```json
+{
+  "statusCode": 200,
+  "body": {
+    "status": "complete",
+    "upload_id": "demo",
+    "campaigns": [...50 pre-generated campaigns...]
+  }
+}
+```
+
+**Implementation Note:** Return pre-generated JSON file from S3 instantly, no processing.
+
+---
+
+## 7. Frontend Specifications
+
+### Single HTML File Structure
+
+**File:** `index.html`
+
+**Dependencies (CDN):**
+```html
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+```
+
+**Component Structure:**
+```
+App (root)
+├── UploadView (initial view)
+├── ProcessingView (after upload)
+└── ResultsView
+    ├── CampaignCard (repeating)
+    └── CampaignDetail (modal/overlay)
+```
+
+### View 1: Upload
+
+**Elements:**
+- Page title: "Revive AI - Upload Churned Customers"
+- Drag-drop file upload zone
+- "Load Demo Data" button (primary CTA)
+- File format instructions
+- Sample CSV download link
+
+**Behavior:**
+- Accept .csv files only
+- Max file size: 10 MB
+- Validate on client (basic format check)
+- On upload: Store in S3, call `/process`, capture `execution_arn`
+- On demo: Call `/demo` endpoint instantly
+
+### View 2: Processing
+
+**Elements:**
+- Processing message: "AI Agents Processing 50 Customers..."
+- Animated spinner or progress indicator
+- Cannot navigate away
+
+**Behavior:**
+- Poll `/results` endpoint every 3 seconds until `status` is `complete`
+- Display `completed/total`, `failures`, and `estimated_remaining_seconds`
+- Auto-redirect to results when complete
+- Timeout after 5 minutes with error
+
+### View 3: Results Dashboard
+
+**Elements:**
+- Header: "Generated Campaigns ({count})"
+- Grid of campaign cards (3 columns on desktop)
+- Each card shows:
+  - Company name (bold, 20px)
+  - Churn category badge (colored)
+  - Confidence score (large number + gauge)
+  - First email subject preview
+  - Status badge: success | failed (with tooltip) | pending
+  - "View Details" link
+
+**Behavior:**
+- Click card to open detail view
+- Smooth scroll to top on navigation
+- Responsive grid (1 col mobile, 2 col tablet, 3 col desktop)
+- If a customer fails, display error summary with option to download raw JSON from `status.json`
+
+### View 4: Campaign Detail
+
+**Layout:**
+```
+┌─────────────────────────────────────┐
+│  ← Back to Results                  │
+├─────────────┬───────────────────────┤
+│ Customer    │ Churn Analysis        │
+│ Profile     │ - Category: Pricing   │
+│             │ - Confidence: 87%     │
+│ Company X   │ - Insights: [list]    │
+│ Growth      │                       │
+│ $799/mo     │ Email Campaign        │
+│             │                       │
+│             │ Email 1 (Day 7)       │
+│             │ Subject: ...          │
+│             │ Body: ...             │
+│             │ CTA: ...              │
+│             │                       │
+│             │ Email 2 (Day 14)      │
+│             │ [same structure]      │
+│             │                       │
+│             │ Email 3 (Day 30)      │
+│             │ [same structure]      │
+└─────────────┴───────────────────────┘
+```
+
+**Styling:**
+- Left sidebar: 30% width, gray background
+- Main content: 70% width, white background
+- Email cards: White with shadow, rounded corners
+- Subject lines: Bold, 18px
+- Body text: 16px, line-height 1.6
+- CTAs: Blue button preview
+
+---
+
+## 8. Demo Data Requirements
+
+### CSV: 50 Diverse Customers
+
+**Distribution:**
+
+**By Churn Category:**
+- Pricing: 10 (20%)
+- Features: 12 (24%)
+- Onboarding: 8 (16%)
+- Competition: 8 (16%)
+- Business Closure: 5 (10%)
+- Unclear: 7 (14%)
+
+**By Subscription Tier:**
+- Starter ($99-299): 20 (40%)
+- Growth ($300-999): 20 (40%)
+- Enterprise ($1000+): 10 (20%)
+
+**By Industry:**
+- B2B SaaS: 15
+- E-commerce: 10
+- Agencies: 8
+- EdTech: 7
+- FinTech: 5
+- Other: 5
+
+**Churn Dates:**
+- Spread across September 1-30, 2025
+- Mix of recent (7 days ago) and older (30 days ago)
+
+**Sample Rows:**
+```csv
+c001,cto@techstart.com,TechStart Inc,growth,799,2025-09-15,Switched to competitor with better API
+c002,admin@smallbiz.co,SmallBiz Co,starter,299,2025-09-20,Too expensive for current needs
+c003,founder@ecom.io,EcomShop Pro,growth,599,2025-09-18,Missing inventory features
+c004,ops@agency.com,Digital Agency,enterprise,1499,2025-09-10,Poor onboarding experience
+c005,cfo@fintech.ai,FinTech AI,growth,899,2025-09-22,Company downsizing
+```
+
+**Quality Requirements:**
+- Realistic company names (fictional but believable)
+- Varied cancellation reasons (specific, not generic)
+- Email addresses match company domains
+- Logical MRR for subscription tiers
+- Diverse industries and scenarios
+
+---
+
+## 9. Deployment Checklist
+
+### AWS Setup
+
+**Step 1: S3 Data Bucket**
+```
+Name: revive-ai-data
+Region: us-east-1
+Public Access: Blocked (enforce via bucket policy)
+Versioning: Enabled
+Create folders: uploads/, results/, demo/
+```
+
+**Step 2: S3 Frontend Bucket**
+```
+Name: revive-ai-frontend
+Region: us-east-1
+Public Access: Enabled (read-only via OAC or static website hosting)
+Versioning: Optional
+Folder: web/
+Upload: index.html
+```
+
+**Step 3: Bedrock Access**
+```
+Navigate to: AWS Console → Bedrock
+Enable Model Access for: Claude 3.5 Sonnet
+Wait for approval (usually instant)
+Test in playground
+```
+
+**Step 4: Lambda Functions**
+```
+Function A: revive-ai-api-handler (Python 3.11, 512 MB, 30 s)
+Function B: revive-ai-customer-worker (Python 3.11, 1024 MB, 60 s)
+Env Vars:
+  - DATA_BUCKET
+  - FRONTEND_BUCKET (API handler only)
+  - STATE_MACHINE_ARN (API handler only)
+  - BEDROCK_MODEL_ID
+Notes:
+  - Reuse API handler for Step Functions `PrepareJob` and `FinalizeJob` tasks via additional function alias or separate handler methods
+```
+
+**Step 5: IAM Roles**
+```
+Create role: revive-ai-lambda-role
+Attach policies:
+- AWSLambdaBasicExecutionRole (managed)
+- Custom inline policy for S3 and Bedrock access
+```
+
+**Step 6: Step Functions**
+```
+State machine: revive-ai-orchestration (Standard)
+Tasks:
+  - PrepareJob (Lambda)
+  - Map (customer worker, MaxConcurrency=8)
+  - FinalizeJob (Lambda or API handler reuse)
+Configure retries + CloudWatch logging
+```
+
+**Step 7: API Gateway**
+```
+Type: REST API
+Create Resources: /upload, /process, /results, /demo
+Methods: POST (upload, process, demo), GET (results)
+Integration: Lambda Proxy
+Enable CORS
+Deploy to stage: prod
+Note API endpoint URL
+```
+
+**Step 8: Frontend**
+```
+Upload index.html to S3 bucket: web/index.html
+Enable Static Website Hosting
+Set Index Document: web/index.html
+Note website URL
+Update API endpoint in HTML
+```
+
+**Security Reminder:** Keep `revive-ai-data` private—never enable static hosting or public ACLs on the data bucket.
+
+### Testing Checklist
+
+**Pre-Demo (24 hours before):**
+- [ ] Upload demo CSV to S3: demo/demo_50_customers.csv
+- [ ] Pre-generate campaigns, save to: demo/results.json
+- [ ] Test /demo endpoint returns instantly
+- [ ] Test /upload with small CSV (5 customers)
+- [ ] Test /process completes successfully
+- [ ] Verify all 5 campaigns in results
+- [ ] Confirm Step Functions execution duration <60 seconds
+- [ ] Inspect `results/{upload_id}/status.json` for accurate counts
+- [ ] Check CloudWatch logs for errors
+- [ ] Test UI in Chrome, Firefox, Safari
+- [ ] Verify mobile responsive layout
+- [ ] Test on slow network (throttled)
+
+**Demo Day Morning:**
+- [ ] Test /demo endpoint
+- [ ] Verify website loads
+- [ ] Check API Gateway is responding
+- [ ] Kick off one `/process` call to warm Step Function + workers
+- [ ] Warm up Lambda (make one test call)
+- [ ] Clear browser cache
+- [ ] Have backup laptop ready
+- [ ] Mobile hotspot configured
+
+---
+
+## 10. Performance Requirements
+
+### Processing Speed
+
+**Targets:**
+- Customer worker end-to-end (analysis + campaign): <5 seconds (avg)
+- Step Functions execution (50 customers, concurrency 8): <60 seconds wall-clock
+- Lambda cold start: <5 seconds (keep dependencies slim)
+- `/results` polling response: <300 ms (status.json fetch)
+- UI page load: <2 seconds
+
+**Optimization Strategies:**
+- Use Step Functions `MaxConcurrency` to balance speed vs. Bedrock throttling (start at 8, adjust after load test)
+- Reuse Bedrock client session inside worker (single HTTP pool)
+- Batch status updates (write once every customer) while keeping writes idempotent
+- Keep prompt length reasonable (<2000 tokens)
+- Reduce `max_tokens` where possible to shrink latency
+
+### Error Rate Targets
+
+**Acceptable:**
+- <5% Bedrock API failures (retry once)
+- <2% parsing errors (bad JSON from LLM)
+- 0% Lambda timeouts (300s is plenty)
+- 0% S3 access errors (handle with retries)
+
+**Monitoring:**
+- Log all Bedrock calls to CloudWatch
+- Track processing time per customer
+- Count successes vs failures
+- Alert if >10% failure rate
+
+---
+
+## 11. Quality Assurance
+
+### Campaign Quality Criteria
+
+**Analysis Quality:**
+- Category matches actual reason >80% of time
+- Confidence correlates with signal clarity
+- Insights are specific, not generic
+- Recommendations are actionable
+
+**Campaign Quality:**
+- Emails sound natural, not robotic
+- Subject lines are compelling (<50 chars)
+- Body length is appropriate (150-250 words)
+- Different categories have noticeably different approaches
+- Personalization uses actual customer data
+- CTAs are clear and action-oriented
+
+**Validation Process:**
+1. Generate campaigns for 10 sample customers
+2. Manually review each campaign
+3. Rate on scale 1-5 for quality
+4. Iterate on prompts if average <4
+5. Re-test until consistent quality
+
+### Edge Cases to Handle
+
+**Data Quality:**
+- Missing cancellation_reason → Use "unclear" category
+- Very high MRR (>$5000) → Flag as enterprise, careful approach
+- Very low MRR (<$50) → May not be worth win-back effort
+- Recent churn (<7 days) → Acknowledge it's recent
+- Old churn (>90 days) → Different messaging tone
+
+**LLM Output:**
+- Invalid JSON → Parse error, retry with more explicit instructions
+- Wrong category → Accept if confidence is low
+- Missing fields → Request retry with complete output
+- Too long/short → Validate and request adjustment
+
+---
+
+## 12. Success Criteria
+
+### Demo Day Success
+
+**Must Work:**
+- ✅ Upload CSV or click "Load Demo"
+- ✅ Processing completes without visible errors
+- ✅ Results display with all campaigns
+- ✅ Campaign detail view shows quality emails
+- ✅ Complete demo in under 3 minutes
+- ✅ Step Functions execution visible in console completes in <60 seconds
+
+**Should Impress:**
+- ✅ Campaigns are personalized and relevant
+- ✅ Different churn categories get different approaches
+- ✅ Confidence scores make sense
+- ✅ UI is clean and professional
+- ✅ Processing is reasonably fast
+- ✅ Live progress percentages driven by Step Functions status updates
+
+**Nice to Have:**
+- ✅ Real-time progress updates
+- ✅ Smooth animations
+- ✅ Mobile responsive
+- ✅ Export functionality
+
+### Judging Criteria Alignment
+
+**Innovation (25 pts):**
+- Multi-agent system (2 specialized agents)
+- Step Functions-driven parallel orchestration while staying serverless-simple
+- Autonomous categorization and generation
+- Post-churn focus (unique positioning)
+
+**Technical Excellence (25 pts):**
+- Amazon Bedrock for all AI operations
+- Clean serverless architecture (Step Functions + focused Lambdas)
+- Working demo without errors
+
+**Real-World Impact (25 pts):**
+- Solves $2.5B market problem
+- 15-25% vs 1-2% improvement claim
+- Clear ROI for customers
+
+**Presentation (25 pts):**
+- Clear problem statement
+- Compelling live demo
+- Professional UI
+- Confident delivery
+
+---
+
+## 13. Implementation Priority
+
+### Critical Path (Cannot Skip)
+
+**Day 1-2: Backend**
+1. AWS setup (S3 buckets, Bedrock access, IAM roles)
+2. Implement customer worker Lambda (shared agent prompts + Bedrock client)
+3. Draft Step Functions state machine (PrepareJob, Map, FinalizeJob)
+4. Dry-run workers locally with 5 sample customers
+
+**Day 3-4: Frontend + Integration**
+5. Build API handler Lambda + API Gateway resources
+6. Wire frontend upload + polling to new endpoints
+7. Execute full Step Functions run with 10 customers, verify status updates
+8. Polish HTML UI (upload, processing, results, detail)
+
+**Day 5: Demo Prep**
+9. Generate 50 demo customers + upload to data bucket
+10. Record one successful Step Functions run + store results as demo backup
+11. Practice presentation
+12. Final testing (focus on `/demo` + `/process` flows)
+
+**Day 6: Buffer**
+13. Bug fixes
+14. Polish UI
+15. Submit
+
+### Optional Enhancements (If Time Permits)
+
+**Low Priority:**
+- Real-time progress updates (just use spinner)
+- Timing optimizer agent (hardcode Day 7, 14, 30)
+- Fancy visualizations (simple is fine)
+- Export to PDF (not demo-critical)
+- User authentication (not needed)
+
+---
+
+## 14. Common Implementation Pitfalls
+
+### Avoid These Mistakes
+
+**❌ Don't:** Sprawl into many bespoke services
+**✅ Do:** Keep to Step Functions + two focused Lambdas
+
+**❌ Don't:** Use DynamoDB for MVP
+**✅ Do:** S3 JSON files are sufficient
+
+**❌ Don't:** Live CSV upload during demo
+**✅ Do:** "Load Demo Data" button
+
+**❌ Don't:** Complex error handling
+**✅ Do:** Basic try/catch with logging
+
+**❌ Don't:** Perfect UI with animations
+**✅ Do:** Clean, functional, professional
+
+**❌ Don't:** Fire off uncontrolled parallel Bedrock calls
+**✅ Do:** Use Step Functions `MaxConcurrency` to keep runs <60 s
+
+**❌ Don't:** Custom prompt for each customer
+**✅ Do:** Template with variable substitution
+
+**❌ Don't:** Fine-tune models
+**✅ Do:** Prompt engineering is enough
+
+---
+
+## 15. Final Validation
+
+### Pre-Submission Checklist
+
+**Code:**
+- [ ] Lambda function deployed and tested
+- [ ] Bedrock calls working (test with real data)
+- [ ] S3 bucket configured correctly
+- [ ] API Gateway endpoints responding
+- [ ] Frontend hosted and accessible
+
+**Data:**
+- [ ] 50 demo customers CSV created
+- [ ] Pre-generated campaigns for backup
+- [ ] Sample data validated for quality
+
+**Testing:**
+- [ ] Full flow tested 10+ times
+- [ ] No errors in CloudWatch logs
+- [ ] UI works in Chrome, Firefox, Safari
+- [ ] Processing completes in <60 seconds
+- [ ] Campaigns are high quality
+
+**Demo:**
+- [ ] Presentation practiced 5+ times
+- [ ] Demo script written
+- [ ] Backup plans ready (video, screenshots)
+- [ ] Questions/answers prepared
+
+**Submission:**
+- [ ] GitHub repo is public
+- [ ] README with setup instructions
+- [ ] Video demo recorded and uploaded
+- [ ] Project submitted to Devpost
+
+---
+
+## End of Technical Specification
+
+**Ready to implement? This document contains everything needed to build the system.**
+
+**Focus:** Working demo > Perfect code  
+**Timeline:** 5 days  
+**Success:** Demo works, judges impressed, you win! 🏆

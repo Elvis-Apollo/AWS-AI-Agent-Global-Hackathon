@@ -1,0 +1,144 @@
+{
+  "status": "complete",
+  "upload_id": "demo",
+  "total": 3,
+  "completed": 3,
+  "failed": 0,
+  "campaigns": [
+    {
+      "customer_id": "demo001",
+      "status": "success",
+      "company_name": "TechStart Inc",
+      "email": "cto@techstart.io",
+      "subscription_tier": "growth",
+      "mrr": "799",
+      "churn_date": "2025-09-15",
+      "cancellation_reason": "Switched to competitor with better API",
+      "analysis": {
+        "customer_id": "demo001",
+        "category": "competition",
+        "confidence": 88,
+        "insights": [
+          "Customer explicitly mentioned switching to a competitor",
+          "API quality was the deciding factor",
+          "Growth tier customer with significant MRR indicates value-conscious decision",
+          "Recent churn suggests competitor made compelling offer"
+        ],
+        "recommendation": "Highlight API improvements and unique features vs competitors"
+      },
+      "campaign": {
+        "customer_id": "demo001",
+        "emails": [
+          {
+            "number": 1,
+            "subject": "We've Been Working on Something Special",
+            "body": "Hi there,\n\nWe noticed you recently moved on from TechStart, and while we respect your decision, we wanted to share some exciting updates.\n\nOur engineering team has been hard at work enhancing our API - faster response times, better documentation, and new endpoints that our customers have been raving about. We'd love to show you what's new.\n\nNo pressure, just wanted you to know we're constantly improving and would welcome the chance to earn back your trust.\n\nBest regards,\nThe TechStart Team",
+            "cta": "See What's New"
+          },
+          {
+            "number": 2,
+            "subject": "Here's What Makes Us Different",
+            "body": "Hi again,\n\nWe've been thinking about what you said regarding API capabilities. We wanted to share specifically how we stack up:\n\n• 99.99% uptime SLA with automatic failover\n• Sub-100ms response times globally\n• Real-time webhooks with guaranteed delivery\n• GraphQL and REST support\n• Comprehensive SDK support for 12+ languages\n\nPlus, our dedicated API support team responds in under 2 hours. We'd love to give you a technical walkthrough of our recent improvements.\n\nWould you be open to a brief 15-minute demo?\n\nCheers,\nThe TechStart Team",
+            "cta": "Schedule Demo"
+          },
+          {
+            "number": 3,
+            "subject": "One Last Thing Before You Go",
+            "body": "Hi,\n\nWe know you've moved on, but we wanted to make one final offer.\n\nCome back to TechStart and we'll give you:\n• 3 months at 30% off your previous rate\n• Priority API support for life\n• Early access to our new features\n• Free API usage analysis and optimization session\n\nWe've learned from your feedback and genuinely believe you'll see the difference. This offer expires in 7 days.\n\nIf you're even slightly curious, let's talk. No strings attached.\n\nBest,\nThe TechStart Team",
+            "cta": "Claim Your Offer"
+          }
+        ]
+      }
+    },
+    {
+      "customer_id": "demo002",
+      "status": "success",
+      "company_name": "SmallBiz Solutions",
+      "email": "admin@smallbiz.co",
+      "subscription_tier": "starter",
+      "mrr": "299",
+      "churn_date": "2025-09-20",
+      "cancellation_reason": "Too expensive for current budget",
+      "analysis": {
+        "customer_id": "demo002",
+        "category": "pricing",
+        "confidence": 92,
+        "insights": [
+          "Clear indication of budget constraints",
+          "Starter tier suggests price sensitivity",
+          "Lower MRR indicates cost is primary concern",
+          "No mention of feature gaps, purely financial decision"
+        ],
+        "recommendation": "Offer flexible pricing options and demonstrate ROI"
+      },
+      "campaign": {
+        "customer_id": "demo002",
+        "emails": [
+          {
+            "number": 1,
+            "subject": "We Get It - Budgets Are Tight",
+            "body": "Hi,\n\nWe completely understand that every dollar counts when running a business. You mentioned pricing was a concern, and we want you to know we hear you.\n\nWe're not here to push a sale - we genuinely want to help your business succeed. Sometimes that means finding creative solutions that work within your budget.\n\nWe've helped hundreds of small businesses like yours find the right fit. Would you be open to exploring some options?\n\nTake care,\nThe SmallBiz Team",
+            "cta": "Let's Talk Options"
+          },
+          {
+            "number": 2,
+            "subject": "Payment Flexibility You'll Actually Use",
+            "body": "Hi again,\n\nWe wanted to share some flexible options that might work better for your budget:\n\n• Annual billing with 25% savings\n• Quarterly payments to spread the cost\n• Usage-based pricing (pay only for what you use)\n• Seasonal business? We can adjust your plan monthly\n\nPlus, when you factor in the time you save and errors you prevent, most of our customers see 3-5x ROI within 6 months.\n\nWe can run a quick ROI analysis specific to your business - takes just 10 minutes.\n\nSound good?\n\nBest,\nThe SmallBiz Team",
+            "cta": "Get ROI Analysis"
+          },
+          {
+            "number": 3,
+            "subject": "20% Off - Because We Miss You",
+            "body": "Hi,\n\nOkay, let's make this simple.\n\nCome back and we'll give you 20% off for the next 3 months - no strings attached. That brings your Starter plan down to just $239/month.\n\nAfter 3 months, you can:\n• Continue at the regular price if you're seeing value\n• Switch to a pay-as-you-go plan\n• Cancel anytime with no penalties\n\nWe're confident that once you see the time and money you save, you'll wonder how you managed without us.\n\nThis offer expires in 5 days. Ready to give us another shot?\n\nWarmly,\nThe SmallBiz Team",
+            "cta": "Claim 20% Discount"
+          }
+        ]
+      }
+    },
+    {
+      "customer_id": "demo003",
+      "status": "success",
+      "company_name": "EcomShop Pro",
+      "email": "founder@ecomshop.pro",
+      "subscription_tier": "growth",
+      "mrr": "599",
+      "churn_date": "2025-09-18",
+      "cancellation_reason": "Missing advanced inventory features",
+      "analysis": {
+        "customer_id": "demo003",
+        "category": "features",
+        "confidence": 90,
+        "insights": [
+          "Specific feature gap identified - inventory management",
+          "E-commerce business has unique requirements",
+          "Growth tier suggests they were invested but hit a limitation",
+          "Feature-based churn is often reversible with product updates"
+        ],
+        "recommendation": "Showcase new inventory features and roadmap alignment"
+      },
+      "campaign": {
+        "customer_id": "demo003",
+        "emails": [
+          {
+            "number": 1,
+            "subject": "You Asked, We Built It",
+            "body": "Hi,\n\nWe remember you mentioned needing better inventory management features. Well, we've got some exciting news.\n\nOur product team has been working hard, and we've just released exactly what you were looking for:\n\n• Multi-location inventory tracking\n• Automated reorder points\n• Real-time stock alerts\n• Integration with major suppliers\n• Batch and lot number tracking\n\nWe'd love to show you how these new features could transform your operations.\n\nInterested in a quick demo?\n\nBest,\nThe EcomShop Team",
+            "cta": "See New Features"
+          },
+          {
+            "number": 2,
+            "subject": "Built Specifically for E-commerce",
+            "body": "Hi again,\n\nWe wanted to dive deeper into our new inventory features and how they're designed specifically for e-commerce businesses like yours:\n\n**Advanced Inventory Management:**\n• Predictive restocking based on sales velocity\n• Automated PO generation\n• Supplier performance tracking\n• SKU variant management\n• Warehouse zone optimization\n\n**Plus Coming Soon:**\n• Dropshipping integration (Q4 2025)\n• Returns processing automation\n• AI-powered demand forecasting\n\nThese aren't generic features - they're built from feedback from businesses exactly like yours.\n\nWant early access to our beta program?\n\nCheers,\nThe EcomShop Team",
+            "cta": "Join Beta Program"
+          },
+          {
+            "number": 3,
+            "subject": "Let's Get You Set Up Right This Time",
+            "body": "Hi,\n\nWe know we fell short on inventory features before, and we're sorry about that. But we've learned and improved.\n\nHere's our offer:\n\n• Come back and get 30 days free\n• Dedicated onboarding specialist\n• Custom inventory setup for your business\n• Priority feature requests for 6 months\n• Direct line to our product team\n\nWe're so confident in our new features that we'll give you a 60-day money-back guarantee. If it doesn't solve your inventory challenges, we'll refund you - no questions asked.\n\nReady to give us another chance?\n\nBest,\nThe EcomShop Team",
+            "cta": "Start Free Trial"
+          }
+        ]
+      }
+    }
+  ]
+}
