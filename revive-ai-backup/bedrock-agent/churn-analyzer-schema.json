@@ -1,0 +1,298 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Churn Analyzer Tools",
+    "version": "1.0.0",
+    "description": "Tools for analyzing customer churn and calculating value"
+  },
+  "paths": {
+    "/analyzeChurn": {
+      "post": {
+        "summary": "Analyze customer churn reason with NLP",
+        "description": "Performs NLP analysis to categorize and understand customer churn reasons. Analyzes cancellation text to identify patterns, sentiment, and root causes. Returns churn category, confidence score, key insights, and recommendations. Most effective when combined with other intelligence sources for comprehensive analysis.",
+        "operationId": "analyzeChurn",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "customer_id": {
+                    "type": "string",
+                    "description": "Customer identifier"
+                  },
+                  "company_name": {
+                    "type": "string",
+                    "description": "Company name"
+                  },
+                  "subscription_tier": {
+                    "type": "string",
+                    "description": "Subscription tier"
+                  },
+                  "mrr": {
+                    "type": "number",
+                    "description": "Monthly recurring revenue"
+                  },
+                  "churn_date": {
+                    "type": "string",
+                    "description": "Churn date"
+                  },
+                  "cancellation_reason": {
+                    "type": "string",
+                    "description": "Reason for cancellation"
+                  }
+                },
+                "required": ["customer_id", "company_name", "cancellation_reason"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Analysis result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string"
+                    },
+                    "confidence": {
+                      "type": "integer"
+                    },
+                    "insights": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "recommendation": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/calculateCLV": {
+      "post": {
+        "summary": "Calculate customer lifetime value",
+        "description": "Calculates CLV and priority for win-back efforts",
+        "operationId": "calculateCLV",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "mrr": {
+                    "type": "number",
+                    "description": "Monthly recurring revenue"
+                  },
+                  "subscription_tier": {
+                    "type": "string",
+                    "description": "Subscription tier"
+                  }
+                },
+                "required": ["mrr"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "CLV calculation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "clv": {
+                      "type": "number"
+                    },
+                    "priority": {
+                      "type": "string"
+                    },
+                    "recommendation": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/checkProductRoadmap": {
+      "post": {
+        "summary": "Check product roadmap for upcoming features",
+        "description": "Searches Q1 2025 product roadmap to find upcoming features that may address customer churn reasons. Returns feature launch dates, benefits, development status, and applicability to specific pain points. Valuable for timing win-back campaigns around relevant feature launches and identifying if the customer churned just before their issue gets resolved.",
+        "operationId": "checkProductRoadmap",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "churn_category": {
+                    "type": "string",
+                    "description": "Category of churn reason (e.g. features, performance, pricing)"
+                  },
+                  "churn_reason": {
+                    "type": "string",
+                    "description": "Specific churn reason text"
+                  }
+                },
+                "required": ["churn_category"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Roadmap features that address this churn reason",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "roadmap_version": {
+                      "type": "string"
+                    },
+                    "relevant_features_count": {
+                      "type": "integer"
+                    },
+                    "features": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/getCRMHistory": {
+      "post": {
+        "summary": "Retrieve customer CRM history and usage patterns",
+        "description": "Retrieves comprehensive CRM data including usage patterns, support ticket history with sentiment analysis, engagement scores, and health metrics. Reveals what customer actually did vs. what they said. Identifies churn risk flags and missed upsell opportunities. Useful for cross-referencing stated churn reasons with actual behavior patterns.",
+        "operationId": "getCRMHistory",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "customer_id": {
+                    "type": "string",
+                    "description": "Customer identifier"
+                  }
+                },
+                "required": ["customer_id"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Customer CRM history and insights",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "found": {
+                      "type": "boolean"
+                    },
+                    "customer_id": {
+                      "type": "string"
+                    },
+                    "usage_summary": {
+                      "type": "object"
+                    },
+                    "support_summary": {
+                      "type": "object"
+                    },
+                    "health_metrics": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/searchCompanyInfo": {
+      "post": {
+        "summary": "Search web for company business intelligence",
+        "description": "Searches web for recent company news, funding announcements, growth indicators, and current business status. Provides external market intelligence about the customer's company including funding rounds, expansion plans, leadership changes, and financial health. Helpful for assessing win-back timing, budget availability, and business priorities.",
+        "operationId": "searchCompanyInfo",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "company_name": {
+                    "type": "string",
+                    "description": "Company name to search for"
+                  },
+                  "query": {
+                    "type": "string",
+                    "description": "Optional specific search query"
+                  }
+                },
+                "required": ["company_name"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Company information from web search",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "company_name": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "recent_news": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "company_info": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

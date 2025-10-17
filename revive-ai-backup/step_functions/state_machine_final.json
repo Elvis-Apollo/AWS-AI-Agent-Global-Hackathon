@@ -1,0 +1,89 @@
+{
+  "Comment": "Revive AI - Customer Win-back Campaign Orchestration",
+  "StartAt": "PrepareJob",
+  "States": {
+    "PrepareJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "arn:aws:lambda:us-east-1:292101577831:function:revive-ai-api-handler",
+        "Payload": {
+          "task": "prepare_job",
+          "upload_id.$": "$.upload_id",
+          "total.$": "$.total",
+          "execution_arn.$": "$$.Execution.Id"
+        }
+      },
+      "ResultPath": "$.prepare_result",
+      "Next": "ProcessCustomers"
+    },
+    "ProcessCustomers": {
+      "Type": "Map",
+      "ItemsPath": "$.customers",
+      "MaxConcurrency": 8,
+      "Parameters": {
+        "upload_id.$": "$.upload_id",
+        "customer.$": "$$.Map.Item.Value"
+      },
+      "Iterator": {
+        "StartAt": "ProcessSingleCustomer",
+        "States": {
+          "ProcessSingleCustomer": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "arn:aws:lambda:us-east-1:292101577831:function:revive-ai-customer-worker",
+              "Payload": {
+                "upload_id.$": "$.upload_id",
+                "customer.$": "$.customer"
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed",
+                  "States.Timeout",
+                  "Lambda.ServiceException",
+                  "Lambda.SdkClientException"
+                ],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 2,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "ResultPath": "$.error",
+                "Next": "CustomerFailed"
+              }
+            ],
+            "End": true
+          },
+          "CustomerFailed": {
+            "Type": "Pass",
+            "Result": {
+              "status": "failed"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultPath": "$.map_results",
+      "Next": "FinalizeJob"
+    },
+    "FinalizeJob": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "arn:aws:lambda:us-east-1:292101577831:function:revive-ai-api-handler",
+        "Payload": {
+          "task": "finalize_job",
+          "upload_id.$": "$.upload_id"
+        }
+      },
+      "ResultPath": "$.finalize_result",
+      "End": true
+    }
+  }
+}
