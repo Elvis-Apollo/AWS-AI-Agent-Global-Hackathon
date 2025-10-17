@@ -43,8 +43,8 @@ ReviveAI is a **production-ready AI agent system** that analyzes why customers c
 
 **Input (CSV Upload):**
 ```csv
-customer_id,company_name,email,mrr,churn_date,cancellation_reason
-c007,MarketPro,jane@marketpro.com,199,2024-12-20,Subscription too expensive
+customer_id,email,company_name,subscription_tier,mrr,churn_date,cancellation_reason
+c007,cto@techstart.io,MarketPro Analytics Inc,starter,199,2025-09-25,Not enough ROI for the subscription cost
 ```
 
 **AI Agent Analysis:**
@@ -183,9 +183,9 @@ cd revive-ai
 
 **Required Fields:**
 ```csv
-customer_id,company_name,email,mrr,churn_date,cancellation_reason
-c001,DataTech Inc,john@datatech.com,2400,2024-12-15,API rate limits too restrictive
-c002,MarketPro,jane@marketpro.com,199,2024-12-20,Subscription too expensive
+customer_id,email,company_name,subscription_tier,mrr,churn_date,cancellation_reason
+c001,john@datatech.com,DataTech Inc,growth,2400,2024-12-15,API rate limits too restrictive
+c002,jane@marketpro.com,MarketPro,starter,199,2024-12-20,Subscription too expensive
 ```
 
 **Optional Fields:**
