@@ -1,2 +1,0 @@
-customer_id,email,company_name,subscription_tier,mrr,churn_date,cancellation_reason
-c007,cto@techstart.io,MarketPro Analytics Inc,starter,199,2025-09-25,Not enough ROI for the subscription cost
