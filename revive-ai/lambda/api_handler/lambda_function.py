@@ -262,7 +262,7 @@ Example format:
 Your response (JSON array only):"""
 
     try:
-        bedrock = BedrockClient(model_id='us.anthropic.claude-3-5-haiku-20241022-v1:0')
+        bedrock = BedrockClient(model_id='us.anthropic.claude-haiku-4-5-20251001-v1:0')
         response = bedrock.invoke_json(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
@@ -365,7 +365,7 @@ def handle_async_processing(event: Dict[str, Any], context) -> Dict[str, Any]:
             from shared.bedrock_client import BedrockClient
             from shared.agents import CampaignGenerationAgent
 
-            bedrock = BedrockClient(model_id='us.anthropic.claude-3-5-haiku-20241022-v1:0')
+            bedrock = BedrockClient(model_id='us.anthropic.claude-haiku-4-5-20251001-v1:0')
             campaign_agent = CampaignGenerationAgent(bedrock)
 
             customer_for_campaign = customer.copy()

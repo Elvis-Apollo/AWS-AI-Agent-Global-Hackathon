@@ -155,6 +155,7 @@ QUALITY REQUIREMENTS:
 
 Respond ONLY with valid JSON:
 {{
+  "summary": "One sentence capturing the win-back strategy (e.g., 'Address HIPAA compliance gap with new certification + 25% discount')",
   "emails": [
     {{"number": 1, "subject": "...", "body": "...", "cta": "..."}},
     {{"number": 2, "subject": "...", "body": "...", "cta": "..."}},

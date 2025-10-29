@@ -108,6 +108,14 @@ def validate_campaign(campaign: Dict[str, Any]) -> tuple[bool, Optional[str]]:
     Returns:
         (is_valid, error_message)
     """
+    # Validate summary (optional but recommended)
+    if 'summary' in campaign:
+        summary = campaign['summary']
+        if not isinstance(summary, str) or len(summary) < 10:
+            return False, "Summary must be at least 10 characters"
+        if len(summary) > 300:
+            return False, f"Summary too long ({len(summary)} chars, max 300)"
+
     if 'emails' not in campaign:
         return False, "Missing 'emails' field"
 
