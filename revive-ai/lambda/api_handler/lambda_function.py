@@ -11,12 +11,15 @@ import base64
 from datetime import datetime
 from typing import Dict, Any, List
 import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Add shared module to path
 sys.path.insert(0, '/opt/python')
 
 from shared.s3_helper import S3Helper
 from shared.schemas import create_status_stub, validate_customer
+from shared.rate_limiter import TokenBucketRateLimiter
 
 import boto3
 
@@ -28,8 +31,21 @@ COORDINATOR_ALIAS_ID = os.environ.get('COORDINATOR_ALIAS_ID', 'ZDNG15XWYW')
 CHURN_ANALYZER_AGENT_ID = os.environ.get('CHURN_ANALYZER_AGENT_ID', 'HAKDC7PY1Z')
 CHURN_ANALYZER_ALIAS_ID = os.environ.get('CHURN_ANALYZER_ALIAS_ID', 'TSTALIASID')  # DRAFT version with better tool usage
 CAMPAIGN_GENERATOR_AGENT_ID = os.environ.get('CAMPAIGN_GENERATOR_AGENT_ID', 'HXMON0RCRP')
+
+# Concurrency settings
+# With 125 RPM CrossRegionRequests limit:
+# - Target: 100 RPM (80% of limit, 25 RPM safety buffer for retries)
+# - Each customer makes ~8 API calls
+# - 100 RPM = ~12 customers/minute throughput
+# - MAX_WORKERS=10: High concurrency with rate limiting to prevent bursts
+MAX_WORKERS = int(os.environ.get('MAX_WORKERS', '10'))  # High concurrency for 1-500 customers
+API_RATE_LIMIT = int(os.environ.get('API_RATE_LIMIT', '100'))  # Target 100 RPM (80% of 125 limit)
+
 CAMPAIGN_GENERATOR_ALIAS_ID = os.environ.get('CAMPAIGN_GENERATOR_ALIAS_ID', 'TSTALIASID')
 AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1')
+
+# Global rate limiter instance (shared across threads)
+rate_limiter = TokenBucketRateLimiter(rate_per_minute=API_RATE_LIMIT)
 
 # Initialize Bedrock agent runtime client
 bedrock_agent_runtime = boto3.client('bedrock-agent-runtime', region_name=AWS_REGION)
@@ -329,15 +345,118 @@ def create_intelligence_summary(analysis_text: str, tools_used: List[Dict], camp
     return summary
 
 
+def process_single_customer(
+    customer: Dict[str, Any],
+    upload_id: str,
+    company_info: Dict[str, Any],
+    s3: S3Helper
+) -> Dict[str, Any]:
+    """
+    Process a single customer through churn analysis and campaign generation.
+    Thread-safe function for concurrent processing.
+
+    Args:
+        customer: Customer data dict
+        upload_id: Upload ID for result storage
+        company_info: Company context for campaign generation
+        s3: S3 helper instance
+
+    Returns:
+        Formatted result dict with status='success' or 'failed'
+    """
+    customer_id = customer.get('customer_id', 'unknown')
+
+    try:
+        print(f"[Async] Processing customer {customer_id}...")
+
+        # Step 1: ChurnAnalyzer Agent (rate limiting happens inside invoke function)
+        churn_result = invoke_churn_analyzer_enhanced(customer)
+        analysis_text = churn_result.get('analysis', '')
+
+        # Step 2: CampaignGenerationAgent
+        from shared.bedrock_client import BedrockClient
+        from shared.agents import CampaignGenerationAgent
+
+        bedrock = BedrockClient(model_id='us.anthropic.claude-haiku-4-5-20251001-v1:0')
+        campaign_agent = CampaignGenerationAgent(bedrock)
+
+        customer_for_campaign = customer.copy()
+        analysis_for_campaign = {
+            'full_text': analysis_text,
+            'category': churn_result.get('category', 'unclear'),
+            'confidence': churn_result.get('confidence', 0),
+            'insights': churn_result.get('insights', []),
+            'recommendation': churn_result.get('recommendation', '')
+        }
+
+        campaign_result = campaign_agent.generate(customer_for_campaign, analysis_for_campaign, company_info)
+
+        # Step 3: Create intelligence summary
+        intelligence_summary = create_intelligence_summary(
+            analysis_text=analysis_text,
+            tools_used=churn_result.get('tools_used', []),
+            campaign_emails=campaign_result.get('emails', []),
+            customer=customer
+        )
+
+        # Format result - flatten customer fields to top level for frontend
+        formatted_result = {
+            'customer_id': customer_id,
+            'status': 'success',
+            # Customer fields at top level
+            'email': customer.get('email'),
+            'company_name': customer.get('company_name'),
+            'subscription_tier': customer.get('subscription_tier'),
+            'mrr': customer.get('mrr'),
+            'churn_date': customer.get('churn_date'),
+            'cancellation_reason': customer.get('cancellation_reason'),
+            # Also keep nested customer for backward compatibility
+            'customer': {
+                'email': customer.get('email'),
+                'company_name': customer.get('company_name'),
+                'subscription_tier': customer.get('subscription_tier'),
+                'mrr': customer.get('mrr'),
+                'churn_date': customer.get('churn_date'),
+                'cancellation_reason': customer.get('cancellation_reason')
+            },
+            'analysis': {
+                'category': churn_result.get('category'),
+                'confidence': churn_result.get('confidence'),
+                'full_text': analysis_text,
+                'tools_used': churn_result.get('tools_used', [])
+            },
+            'campaign': campaign_result,
+            'intelligence_summary': intelligence_summary,
+            'processed_at': datetime.utcnow().isoformat() + 'Z'
+        }
+
+        # Save individual result
+        s3.put_json(f"results/{upload_id}/customers/{customer_id}.json", formatted_result)
+        print(f"[Async] ✓ Successfully processed {customer_id}")
+
+        return formatted_result
+
+    except Exception as e:
+        print(f"[Async] ✗ Failed to process customer {customer_id}: {e}")
+        import traceback
+        traceback.print_exc()
+
+        return {
+            'customer_id': customer_id,
+            'status': 'failed',
+            'error': str(e)
+        }
+
+
 def handle_async_processing(event: Dict[str, Any], context) -> Dict[str, Any]:
     """
     Handle async processing triggered by Event invocation.
-    Processes all customers sequentially and updates S3 status.
+    Processes customers concurrently using ThreadPoolExecutor with rate limiting.
     """
     upload_id = event.get('upload_id')
     customers = event.get('customers', [])
 
-    print(f"[Async] Starting processing for upload {upload_id} with {len(customers)} customers")
+    print(f"[Async] Starting concurrent processing for upload {upload_id} with {len(customers)} customers (MAX_WORKERS={MAX_WORKERS}, API_RATE_LIMIT={API_RATE_LIMIT} RPM)")
 
     s3 = S3Helper(DATA_BUCKET)
 
@@ -348,109 +467,68 @@ def handle_async_processing(event: Dict[str, Any], context) -> Dict[str, Any]:
         'value_proposition': 'AI-powered customer analytics and retention platform'
     }
 
-    results = []
+    # Thread-safe counters
+    completed_lock = threading.Lock()
     completed = 0
     failed = 0
+    results = []
 
-    for customer in customers:
-        try:
-            customer_id = customer.get('customer_id', f'customer_{completed + failed + 1}')
-            print(f"[Async] Processing customer {customer_id}...")
+    # Adaptive progress update frequency based on batch size
+    if len(customers) < 10:
+        update_interval = 1  # Every customer for small batches
+    elif len(customers) < 50:
+        update_interval = 5  # Every 5 customers for medium batches
+    else:
+        update_interval = 10  # Every 10 customers for large batches
 
-            # Step 1: ChurnAnalyzer Agent
-            churn_result = invoke_churn_analyzer_enhanced(customer)
-            analysis_text = churn_result.get('analysis', '')
+    print(f"[Async] Progress update interval: every {update_interval} customers")
 
-            # Step 2: CampaignGenerationAgent
-            from shared.bedrock_client import BedrockClient
-            from shared.agents import CampaignGenerationAgent
+    def update_progress():
+        """Thread-safe progress update."""
+        nonlocal completed, failed
+        with completed_lock:
+            status = s3.get_json(f"results/{upload_id}/status.json") or {}
+            status['completed'] = completed
+            status['failed'] = failed
+            status['progress'] = int((completed / len(customers)) * 100) if len(customers) > 0 else 0
+            status['updated_at'] = datetime.utcnow().isoformat() + 'Z'
+            s3.put_json(f"results/{upload_id}/status.json", status)
 
-            bedrock = BedrockClient(model_id='us.anthropic.claude-haiku-4-5-20251001-v1:0')
-            campaign_agent = CampaignGenerationAgent(bedrock)
+    # Process customers concurrently
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Submit all tasks
+        future_to_customer = {
+            executor.submit(process_single_customer, customer, upload_id, company_info, s3): customer
+            for customer in customers
+        }
 
-            customer_for_campaign = customer.copy()
-            analysis_for_campaign = {
-                'full_text': analysis_text,
-                'category': churn_result.get('category', 'unclear'),
-                'confidence': churn_result.get('confidence', 0),
-                'insights': churn_result.get('insights', []),
-                'recommendation': churn_result.get('recommendation', '')
-            }
+        # Process completed tasks as they finish
+        for future in as_completed(future_to_customer):
+            result = future.result()
+            results.append(result)
 
-            campaign_result = campaign_agent.generate(customer_for_campaign, analysis_for_campaign, company_info)
+            # Update counters
+            with completed_lock:
+                if result['status'] == 'success':
+                    completed += 1
+                else:
+                    failed += 1
 
-            # Step 3: Create intelligence summary
-            intelligence_summary = create_intelligence_summary(
-                analysis_text=analysis_text,
-                tools_used=churn_result.get('tools_used', []),
-                campaign_emails=campaign_result.get('emails', []),
-                customer=customer
-            )
-
-            # Format result - flatten customer fields to top level for frontend
-            formatted_result = {
-                'customer_id': customer_id,
-                'status': 'success',
-                # Customer fields at top level
-                'email': customer.get('email'),
-                'company_name': customer.get('company_name'),
-                'subscription_tier': customer.get('subscription_tier'),
-                'mrr': customer.get('mrr'),
-                'churn_date': customer.get('churn_date'),
-                'cancellation_reason': customer.get('cancellation_reason'),
-                # Also keep nested customer for backward compatibility
-                'customer': {
-                    'email': customer.get('email'),
-                    'company_name': customer.get('company_name'),
-                    'subscription_tier': customer.get('subscription_tier'),
-                    'mrr': customer.get('mrr'),
-                    'churn_date': customer.get('churn_date'),
-                    'cancellation_reason': customer.get('cancellation_reason')
-                },
-                'analysis': {
-                    'category': churn_result.get('category'),
-                    'confidence': churn_result.get('confidence'),
-                    'full_text': analysis_text,
-                    'tools_used': churn_result.get('tools_used', [])
-                },
-                'campaign': campaign_result,
-                'intelligence_summary': intelligence_summary,
-                'processed_at': datetime.utcnow().isoformat() + 'Z'
-            }
-
-            results.append(formatted_result)
-            completed += 1
-
-            # Save individual result
-            s3.put_json(f"results/{upload_id}/customers/{customer_id}.json", formatted_result)
-            print(f"[Async] ✓ Successfully processed {customer_id}")
-
-        except Exception as e:
-            print(f"[Async] ✗ Failed to process customer: {e}")
-            import traceback
-            traceback.print_exc()
-            failed += 1
-            results.append({
-                'customer_id': customer.get('customer_id', f'customer_{completed + failed}'),
-                'status': 'failed',
-                'error': str(e)
-            })
-
-        # Update progress
-        status = s3.get_json(f"results/{upload_id}/status.json") or {}
-        status['completed'] = completed
-        status['failed'] = failed
-        status['progress'] = int((completed / len(customers)) * 100) if len(customers) > 0 else 0
-        status['updated_at'] = datetime.utcnow().isoformat() + 'Z'
-        s3.put_json(f"results/{upload_id}/status.json", status)
+            # Update progress adaptively
+            if (completed + failed) % update_interval == 0 or (completed + failed) == len(customers):
+                update_progress()
 
     # Finalize
-    status['status'] = 'complete'
-    status['updated_at'] = datetime.utcnow().isoformat() + 'Z'
-    s3.put_json(f"results/{upload_id}/status.json", status)
+    final_status = s3.get_json(f"results/{upload_id}/status.json") or {}
+    final_status['status'] = 'complete'
+    final_status['completed'] = completed
+    final_status['failed'] = failed
+    final_status['progress'] = 100
+    final_status['updated_at'] = datetime.utcnow().isoformat() + 'Z'
+    s3.put_json(f"results/{upload_id}/status.json", final_status)
     s3.put_json(f"results/{upload_id}/customers.json", results)
 
-    print(f"[Async] Completed processing: {completed} succeeded, {failed} failed")
+    print(f"[Async] Completed concurrent processing: {completed} succeeded, {failed} failed")
 
     return {
         'statusCode': 200,
@@ -783,6 +861,9 @@ Provide a strategic win-back analysis with actionable recommendations.
     max_retries = 5
     for attempt in range(max_retries):
         try:
+            # Rate limit: Acquire 1 token before API call
+            rate_limiter.acquire(tokens=1)
+
             response = bedrock_agent_runtime.invoke_agent(
                 agentId=CHURN_ANALYZER_AGENT_ID,
                 agentAliasId=CHURN_ANALYZER_ALIAS_ID,
@@ -847,19 +928,20 @@ Provide a strategic win-back analysis with actionable recommendations.
             error_message = str(e)
 
             # Check if it's a throttling error
-            if 'throttlingException' in error_message or 'ThrottlingException' in error_message:
+            if 'throttlingException' in error_message.lower() or 'throttling' in error_message.lower():
                 if attempt < max_retries - 1:
-                    # Exponential backoff: 2^attempt + random jitter
-                    wait_time = (2 ** attempt) + random.uniform(0, 1)
-                    print(f"[Retry] Throttled during stream processing, waiting {wait_time:.2f}s before retry {attempt + 1}/{max_retries}")
+                    # Longer exponential backoff: (2^attempt * 3) + random jitter
+                    # attempt 0: 3-4s, attempt 1: 6-7s, attempt 2: 12-13s, attempt 3: 24-25s, attempt 4: 48-49s
+                    wait_time = (2 ** attempt * 3) + random.uniform(0, 1)
+                    print(f"[Retry] Throttled, waiting {wait_time:.2f}s before retry {attempt + 1}/{max_retries} (customer: {customer.get('customer_id', 'unknown')})")
                     time.sleep(wait_time)
                     continue  # Retry
                 else:
-                    print(f"[Retry] Max retries reached, giving up")
+                    print(f"[Retry] Max retries reached after {max_retries} attempts (customer: {customer.get('customer_id', 'unknown')})")
                     raise
             else:
                 # Not a throttling error, raise immediately
-                print(f"Error invoking ChurnAnalyzer agent: {e}")
+                print(f"Error invoking ChurnAnalyzer agent (customer: {customer.get('customer_id', 'unknown')}): {e}")
                 raise
 
     # Should never reach here
